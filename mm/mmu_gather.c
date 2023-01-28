@@ -187,6 +187,16 @@ static inline void tlb_table_invalidate(struct mmu_gather *tlb)
 	}
 }
 
+static void tlb_remove_table_smp_sync(void *arg)
+{
+	/* Simply deliver the interrupt */
+}
+
+void tlb_remove_table_sync_one(void)
+{
+	smp_call_function(tlb_remove_table_smp_sync, NULL, 1);
+}
+
 static void tlb_remove_table_one(void *table)
 {
 	tlb_remove_table_sync_one();
