@@ -1416,7 +1416,7 @@ static void _sde_crtc_blend_setup_mixer(struct drm_crtc *crtc,
 	struct drm_plane_state *state;
 	struct sde_crtc_state *cstate;
 	struct sde_plane_state *pstate = NULL;
-	struct plane_state pstates[SDE_PSTATES_MAX];
+	struct plane_state *pstates = NULL;
 	struct sde_format *format;
 	struct sde_hw_ctl *ctl;
 	struct sde_hw_mixer *lm;
@@ -1437,6 +1437,10 @@ static void _sde_crtc_blend_setup_mixer(struct drm_crtc *crtc,
 	ctl = mixer->hw_ctl;
 	lm = mixer->hw_lm;
 	cstate = to_sde_crtc_state(crtc->state);
+	pstates = kcalloc(SDE_PSTATES_MAX,
+			sizeof(struct plane_state), GFP_KERNEL);
+	if (!pstates)
+		return;
 
 	memset(fetch_active, 0, sizeof(fetch_active));
 	memset(zpos_cnt, 0, sizeof(zpos_cnt));
@@ -1470,7 +1474,7 @@ static void _sde_crtc_blend_setup_mixer(struct drm_crtc *crtc,
 		format = to_sde_format(msm_framebuffer_format(pstate->base.fb));
 		if (!format) {
 			SDE_ERROR("invalid format\n");
-			return;
+			goto end;
 		}
 
 		blend_type = sde_plane_get_property(pstate,
@@ -1557,9 +1561,15 @@ static void _sde_crtc_blend_setup_mixer(struct drm_crtc *crtc,
 			for (i = 0; i < cstate->num_dim_layers; i++)
 				_sde_crtc_setup_dim_layer_cfg(crtc, sde_crtc,
 						mixer, &cstate->dim_layer[i]);
+			if (cstate->fod_dim_layer)
+				_sde_crtc_setup_dim_layer_cfg(crtc, sde_crtc,
+						mixer, cstate->fod_dim_layer);
 			clear_bit(SDE_CRTC_DIRTY_DIM_LAYERS, cstate->dirty);
 		}
 	}
+
+end:
+	kfree(pstates);
 }
 
 static void _sde_crtc_swap_mixers_for_right_partial_update(
@@ -3801,6 +3811,8 @@ void sde_crtc_commit_kickoff(struct drm_crtc *crtc,
 	}
 	sde_crtc->play_count++;
 
+	sde_vbif_clear_errors(sde_kms);
+
 	if (is_error) {
 		_sde_crtc_remove_pipe_flush(crtc);
 		_sde_crtc_blend_setup(crtc, old_state, false);
@@ -4882,40 +4894,92 @@ static int _sde_crtc_check_zpos(struct drm_crtc_state *state,
 	return rc;
 }
 
-bool sde_crtc_is_fod_enabled(struct drm_crtc_state *state)
+static struct sde_hw_dim_layer *
+sde_crtc_setup_fod_dim_layer(struct sde_crtc_state *cstate, uint32_t stage)
 {
-	struct sde_crtc_state *cstate = to_sde_crtc_state(state);
+	struct drm_crtc_state *crtc_state = &cstate->base;
+	struct drm_display_mode *mode = &crtc_state->adjusted_mode;
+	struct sde_hw_dim_layer *dim_layer = NULL;
+	struct dsi_display *display;
+	struct sde_kms *kms;
+	uint32_t alpha;
+	uint32_t layer_stage;
 
-	return cstate->fod_dim_alpha != 0;
+	kms = _sde_crtc_get_kms(crtc_state->crtc);
+	if (!kms || !kms->catalog) {
+		SDE_ERROR("Invalid kms\n");
+		goto error;
+	}
+
+	layer_stage = SDE_STAGE_0 + stage;
+	if (layer_stage >= kms->catalog->mixer[0].sblk->maxblendstages) {
+		SDE_ERROR("Stage too large %u vs max %u\n", layer_stage,
+			  kms->catalog->mixer[0].sblk->maxblendstages);
+		goto error;
+	}
+
+	if (cstate->num_dim_layers == SDE_MAX_DIM_LAYERS) {
+		SDE_ERROR("Max dim layers reached\n");
+		goto error;
+	}
+
+	display = get_main_display();
+	if (!display || !display->panel) {
+		SDE_ERROR("Invalid primary display\n");
+		goto error;
+	}
+
+	mutex_lock(&display->panel->panel_lock);
+	alpha = display->panel->fod_dim_alpha;
+	mutex_unlock(&display->panel->panel_lock);
+
+	dim_layer = &cstate->dim_layer[cstate->num_dim_layers];
+	dim_layer->flags = SDE_DRM_DIM_LAYER_INCLUSIVE;
+	dim_layer->stage = layer_stage;
+	dim_layer->rect.x = 0;
+	dim_layer->rect.y = 0;
+	dim_layer->rect.w = mode->hdisplay;
+	dim_layer->rect.h = mode->vdisplay;
+	dim_layer->color_fill.color_0 = 0;
+	dim_layer->color_fill.color_1 = 0;
+	dim_layer->color_fill.color_2 = 0;
+	dim_layer->color_fill.color_3 = alpha;
+
+error:
+	return dim_layer;
 }
 
 static void
 sde_crtc_fod_atomic_check(struct sde_crtc_state *cstate,
 			  struct plane_state *pstates, int cnt)
 {
-	unsigned int fod_plane_idx, plane_idx;
-	u8 alpha = 0;
+	struct sde_hw_dim_layer *fod_dim_layer;
+	uint32_t dim_layer_stage;
+	int plane_idx;
 
 	for (plane_idx = 0; plane_idx < cnt; plane_idx++)
 		if (sde_plane_is_fod_layer(pstates[plane_idx].drm_pstate))
 			break;
 
-	fod_plane_idx = plane_idx;
-
-	if (fod_plane_idx != cnt) {
-		struct dsi_display *display = get_main_display();
-		alpha = dsi_panel_get_fod_dim_alpha(display->panel);
+	if (plane_idx == cnt) {
+		fod_dim_layer = NULL;
+	} else {
+		dim_layer_stage = pstates[plane_idx].stage;
+		fod_dim_layer = sde_crtc_setup_fod_dim_layer(cstate,
+							     dim_layer_stage);
 	}
 
-	cstate->fod_dim_alpha = alpha;
+	if (fod_dim_layer == cstate->fod_dim_layer)
+		return;
 
-	for (plane_idx = 0; plane_idx < cnt; plane_idx++) {
-		if (plane_idx == fod_plane_idx)
-			continue;
+	cstate->fod_dim_layer = fod_dim_layer;
 
-		sde_plane_set_fod_dim_alpha(pstates[plane_idx].sde_pstate,
-					    alpha);
-	}
+	if (!fod_dim_layer)
+		return;
+
+	for (plane_idx = 0; plane_idx < cnt; plane_idx++)
+		if (pstates[plane_idx].stage >= dim_layer_stage)
+			pstates[plane_idx].stage++;
 }
 
 static int _sde_crtc_atomic_check_pstates(struct drm_crtc *crtc,
@@ -5032,11 +5096,11 @@ static int sde_crtc_atomic_check(struct drm_crtc *crtc,
 {
 	struct drm_device *dev;
 	struct sde_crtc *sde_crtc;
-	struct plane_state pstates[SDE_PSTATES_MAX];
+	struct plane_state *pstates = NULL;
 	struct sde_crtc_state *cstate;
 	struct drm_display_mode *mode;
 	int rc = 0;
-	struct sde_multirect_plane_states multirect_plane[SDE_MULTIRECT_PLANE_MAX];
+	struct sde_multirect_plane_states *multirect_plane = NULL;
 	struct drm_connector *conn;
 	struct drm_connector_list_iter conn_iter;
 
@@ -5052,6 +5116,18 @@ static int sde_crtc_atomic_check(struct drm_crtc *crtc,
 	if (!state->enable || !state->active) {
 		SDE_DEBUG("crtc%d -> enable %d, active %d, skip atomic_check\n",
 				crtc->base.id, state->enable, state->active);
+		goto end;
+	}
+
+	pstates = kcalloc(SDE_PSTATES_MAX,
+			sizeof(struct plane_state), GFP_KERNEL);
+
+	multirect_plane = kcalloc(SDE_MULTIRECT_PLANE_MAX,
+			sizeof(struct sde_multirect_plane_states),
+			GFP_KERNEL);
+
+	if (!pstates || !multirect_plane) {
+		rc = -ENOMEM;
 		goto end;
 	}
 
@@ -5117,6 +5193,8 @@ static int sde_crtc_atomic_check(struct drm_crtc *crtc,
 		goto end;
 	}
 end:
+	kfree(pstates);
+	kfree(multirect_plane);
 	return rc;
 }
 
@@ -5584,7 +5662,7 @@ static int sde_crtc_atomic_set_property(struct drm_crtc *crtc,
 	uint64_t fence_user_fd;
 	uint64_t __user prev_user_fd;
 
-	if (unlikely(!crtc || !state || !property)) {
+	if (!crtc || !state || !property) {
 		SDE_ERROR("invalid argument(s)\n");
 		return -EINVAL;
 	}
@@ -5595,13 +5673,13 @@ static int sde_crtc_atomic_set_property(struct drm_crtc *crtc,
 	SDE_ATRACE_BEGIN("sde_crtc_atomic_set_property");
 	/* check with cp property system first */
 	ret = sde_cp_crtc_set_property(crtc, property, val);
-	if (unlikely(ret != -ENOENT))
+	if (ret != -ENOENT)
 		goto exit;
 
 	/* if not handled by cp, check msm_property system */
 	ret = msm_property_atomic_set(&sde_crtc->property_info,
 			&cstate->property_state, property, val);
-	if (unlikely(ret))
+	if (ret)
 		goto exit;
 
 	idx = msm_property_index(&sde_crtc->property_info, property);
@@ -5639,7 +5717,7 @@ static int sde_crtc_atomic_set_property(struct drm_crtc *crtc,
 		cstate->bw_split_vote = true;
 		break;
 	case CRTC_PROP_OUTPUT_FENCE:
-		if (unlikely(!val))
+		if (!val)
 			goto exit;
 
 		ret = copy_from_user(&prev_user_fd, (void __user *)val,
@@ -5657,14 +5735,14 @@ static int sde_crtc_atomic_set_property(struct drm_crtc *crtc,
 		if (prev_user_fd == -1) {
 			ret = _sde_crtc_get_output_fence(crtc, state,
 					&fence_user_fd);
-			if (unlikely(ret)) {
+			if (ret) {
 				SDE_ERROR("fence create failed rc:%d\n", ret);
 				goto exit;
 			}
 
 			ret = copy_to_user((uint64_t __user *)(uintptr_t)val,
 					&fence_user_fd, sizeof(uint64_t));
-			if (unlikely(ret)) {
+			if (ret) {
 				SDE_ERROR("copy to user failed rc:%d\n", ret);
 				put_unused_fd(fence_user_fd);
 				ret = -EFAULT;

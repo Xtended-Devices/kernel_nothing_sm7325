@@ -264,9 +264,8 @@ static enum hrtimer_restart hrtick(struct hrtimer *timer)
 static void __hrtick_restart(struct rq *rq)
 {
 	struct hrtimer *timer = &rq->hrtick_timer;
-	ktime_t time = rq->hrtick_time;
 
-	hrtimer_start(timer, time, HRTIMER_MODE_ABS_PINNED_HARD);
+	hrtimer_start_expires(timer, HRTIMER_MODE_ABS_PINNED_HARD);
 }
 
 /*
@@ -291,6 +290,7 @@ static void __hrtick_start(void *arg)
 void hrtick_start(struct rq *rq, u64 delay)
 {
 	struct hrtimer *timer = &rq->hrtick_timer;
+	ktime_t time;
 	s64 delta;
 
 	/*
@@ -298,7 +298,9 @@ void hrtick_start(struct rq *rq, u64 delay)
 	 * doesn't make sense and can cause timer DoS.
 	 */
 	delta = max_t(s64, delay, 10000LL);
-	rq->hrtick_time = ktime_add_ns(timer->base->get_time(), delta);
+	time = ktime_add_ns(timer->base->get_time(), delta);
+
+	hrtimer_set_expires(timer, time);
 
 	if (rq == this_rq()) {
 		__hrtick_restart(rq);
@@ -1447,6 +1449,9 @@ static inline void dequeue_task(struct rq *rq, struct task_struct *p, int flags)
 
 void activate_task(struct rq *rq, struct task_struct *p, int flags)
 {
+	if (task_on_rq_migrating(p))
+		flags |= ENQUEUE_MIGRATED;
+
 	if (task_contributes_to_load(p))
 		rq->nr_uninterruptible--;
 
@@ -3609,6 +3614,7 @@ context_switch(struct rq *rq, struct task_struct *prev,
 		 * finish_task_switch()'s mmdrop().
 		 */
 		switch_mm_irqs_off(prev->active_mm, next->mm, next);
+		lru_gen_use_mm(next->mm);
 
 		if (!prev->mm) {                        // from kernel
 			/* will mmdrop() in finish_task_switch(). */
@@ -4749,21 +4755,20 @@ void rt_mutex_setprio(struct task_struct *p, struct task_struct *pi_task)
 		if (!dl_prio(p->normal_prio) ||
 		    (pi_task && dl_prio(pi_task->prio) &&
 		     dl_entity_preempt(&pi_task->dl, &p->dl))) {
-			p->dl.pi_se = pi_task->dl.pi_se;
+			p->dl.dl_boosted = 1;
 			queue_flag |= ENQUEUE_REPLENISH;
-		} else {
-			p->dl.pi_se = &p->dl;
-		}
+		} else
+			p->dl.dl_boosted = 0;
 		p->sched_class = &dl_sched_class;
 	} else if (rt_prio(prio)) {
 		if (dl_prio(oldprio))
-			p->dl.pi_se = &p->dl;
+			p->dl.dl_boosted = 0;
 		if (oldprio < prio)
 			queue_flag |= ENQUEUE_HEAD;
 		p->sched_class = &rt_sched_class;
 	} else {
 		if (dl_prio(oldprio))
-			p->dl.pi_se = &p->dl;
+			p->dl.dl_boosted = 0;
 		if (rt_prio(oldprio))
 			p->rt.timeout = 0;
 		p->sched_class = &fair_sched_class;
@@ -4987,8 +4992,7 @@ static void __setscheduler_params(struct task_struct *p,
 	if (policy == SETPARAM_POLICY)
 		policy = p->policy;
 
-	/* Replace SCHED_FIFO with SCHED_RR to reduce latency */
-	p->policy = policy == SCHED_FIFO ? SCHED_RR : policy;
+	p->policy = policy;
 
 	if (dl_policy(policy))
 		__setparam_dl(p, attr);
@@ -5940,14 +5944,14 @@ SYSCALL_DEFINE3(sched_getaffinity, pid_t, pid, unsigned int, len,
 	if (len & (sizeof(unsigned long)-1))
 		return -EINVAL;
 
-	if (!alloc_cpumask_var(&mask, GFP_KERNEL))
+	if (!zalloc_cpumask_var(&mask, GFP_KERNEL))
 		return -ENOMEM;
 
 	ret = sched_getaffinity(pid, mask);
 	if (ret == 0) {
 		unsigned int retlen = min(len, cpumask_size());
 
-		if (copy_to_user(user_mask_ptr, mask, retlen))
+		if (copy_to_user(user_mask_ptr, cpumask_bits(mask), retlen))
 			ret = -EFAULT;
 		else
 			ret = retlen;

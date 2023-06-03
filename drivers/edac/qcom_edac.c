@@ -372,6 +372,9 @@ static int qcom_llcc_edac_probe(struct platform_device *pdev)
 	edev_ctl->dev_name = dev_name(dev);
 	edev_ctl->ctl_name = "llcc";
 	edev_ctl->panic_on_ue = LLCC_ERP_PANIC_ON_UE;
+#ifdef CONFIG_EDAC_QCOM_LLCC_PANIC_ON_CE
+	edev_ctl->panic_on_ce = LLCC_ERP_PANIC_ON_CE;
+#endif
 
 	/* Request for ecc irq */
 	ecc_irq = llcc_driv_data->ecc_irq;

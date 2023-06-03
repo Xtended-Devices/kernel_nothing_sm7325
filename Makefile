@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 VERSION = 5
 PATCHLEVEL = 4
-SUBLEVEL = 231
+SUBLEVEL = 242
 EXTRAVERSION =
 NAME = Kleptomaniac Octopus
 
@@ -93,9 +93,16 @@ endif
 
 # If the user is running make -s (silent mode), suppress echoing of
 # commands
+# make-4.0 (and later) keep single letter options in the 1st word of MAKEFLAGS.
 
-ifneq ($(findstring s,$(filter-out --%,$(MAKEFLAGS))),)
-  quiet=silent_
+ifeq ($(filter 3.%,$(MAKE_VERSION)),)
+silence:=$(findstring s,$(firstword -$(MAKEFLAGS)))
+else
+silence:=$(findstring s,$(filter-out --%,$(MAKEFLAGS)))
+endif
+
+ifeq ($(silence),s)
+quiet=silent_
 endif
 
 export quiet Q KBUILD_VERBOSE
@@ -406,7 +413,7 @@ HOSTCC	= gcc
 HOSTCXX	= g++
 endif
 KBUILD_HOSTCFLAGS   := -Wall -Wmissing-prototypes -Wstrict-prototypes -O2 \
-		-fomit-frame-pointer -std=gnu89 -pipe $(HOST_LFS_CFLAGS) \
+		-fomit-frame-pointer -std=gnu89 $(HOST_LFS_CFLAGS) \
 		$(HOSTCFLAGS)
 KBUILD_HOSTCXXFLAGS := -O2 $(HOST_LFS_CFLAGS) $(HOSTCXXFLAGS)
 KBUILD_HOSTLDFLAGS  := $(HOST_LFS_LDFLAGS) $(HOSTLDFLAGS)
@@ -493,7 +500,7 @@ KBUILD_CFLAGS   := -Wall -Wundef -Werror=strict-prototypes -Wno-trigraphs \
 		   -fno-strict-aliasing -fno-common -fshort-wchar -fno-PIE \
 		   -Werror=implicit-function-declaration -Werror=implicit-int \
 		   -Werror=return-type -Wno-format-security \
-		   -std=gnu89 -pipe
+		   -std=gnu89
 KBUILD_CPPFLAGS := -D__KERNEL__
 KBUILD_AFLAGS_KERNEL :=
 KBUILD_CFLAGS_KERNEL :=
@@ -754,16 +761,6 @@ else ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS += -Os
 endif
 
-ifdef CONFIG_LLVM_POLLY
-KBUILD_CFLAGS	+= -mllvm -polly \
-		   -mllvm -polly-run-inliner \
-		   -mllvm -polly-isl-arg=--no-schedule-serialize-sccs \
-		   -mllvm -polly-ast-use-context \
-		   -mllvm -polly-detect-keep-going \
-		   -mllvm -polly-vectorizer=stripmine \
-		   -mllvm -polly-invariant-load-hoisting
-endif
-
 # Tell gcc to never replace conditional load with a non-conditional one
 KBUILD_CFLAGS	+= $(call cc-option,--param=allow-store-data-races=0)
 KBUILD_CFLAGS	+= $(call cc-option,-fno-allow-store-data-races)
@@ -801,6 +798,8 @@ KBUILD_CFLAGS += -Wno-tautological-compare
 # source of a reference will be _MergedGlobals and not on of the whitelisted names.
 # See modpost pattern 2
 KBUILD_CFLAGS += -mno-global-merge
+KBUILD_CFLAGS += $(call cc-disable-warning, undefined-optimized)
+KBUILD_CFLAGS += -fno-builtin
 else
 
 # Warn about unmarked fall-throughs in switch statement.
@@ -834,11 +833,11 @@ endif
 
 # Initialize all stack variables with a zero value.
 ifdef CONFIG_INIT_STACK_ALL_ZERO
-# Future support for zero initialization is still being debated, see
-# https://bugs.llvm.org/show_bug.cgi?id=45497. These flags are subject to being
-# renamed or dropped.
 KBUILD_CFLAGS	+= -ftrivial-auto-var-init=zero
+ifdef CONFIG_CC_HAS_AUTO_VAR_INIT_ZERO_ENABLER
+# https://github.com/llvm/llvm-project/issues/44842
 KBUILD_CFLAGS	+= -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang
+endif
 endif
 
 DEBUG_CFLAGS	:= $(call cc-option, -fno-var-tracking-assignments)
@@ -928,11 +927,13 @@ CC_FLAGS_LTO_CLANG := -flto
 endif
 CC_FLAGS_LTO_CLANG += -fvisibility=default
 
-KBUILD_LDS_MODULE += $(srctree)/scripts/module-lto.lds
+# Limit inlining across translation units to reduce binary size
+LD_FLAGS_LTO_CLANG := -mllvm -import-instr-limit=5
 
-# Set O3 optimization level for LTO
-KBUILD_LDFLAGS		+= --plugin-opt=O3
-KBUILD_LDFLAGS      += --lto-O3
+KBUILD_LDFLAGS += $(LD_FLAGS_LTO_CLANG)
+KBUILD_LDFLAGS_MODULE += $(LD_FLAGS_LTO_CLANG)
+
+KBUILD_LDS_MODULE += $(srctree)/scripts/module-lto.lds
 endif
 
 ifdef CONFIG_LTO

@@ -856,14 +856,13 @@ struct sde_connector_dyn_hdr_metadata *sde_connector_get_dyn_hdr_meta(
 	return &c_state->dyn_hdr_meta;
 }
 
-static bool sde_connector_is_fod_enabled(struct sde_connector *c_conn)
+static bool sde_connector_fod_dim_layer_status(struct sde_connector *c_conn)
 {
-	struct drm_connector *connector = &c_conn->base;
-
-	if (!connector->state || !connector->state->crtc)
+	if (!c_conn->encoder || !c_conn->encoder->crtc ||
+	    !c_conn->encoder->crtc->state)
 		return false;
 
-	return sde_crtc_is_fod_enabled(connector->state->crtc->state);
+	return !!to_sde_crtc_state(c_conn->encoder->crtc->state)->fod_dim_layer;
 }
 
 struct dsi_panel *sde_connector_panel(struct sde_connector *c_conn)
@@ -876,32 +875,23 @@ struct dsi_panel *sde_connector_panel(struct sde_connector *c_conn)
 static void sde_connector_pre_update_fod_hbm(struct sde_connector *c_conn)
 {
 	struct dsi_panel *panel;
-	u32 refresh_rate;
 	bool status;
 
 	panel = sde_connector_panel(c_conn);
 	if (!panel)
 		return;
 
-	mutex_lock(&panel->panel_lock);
-	refresh_rate = panel->cur_mode->timing.refresh_rate;
-	mutex_unlock(&panel->panel_lock);
-
-	status = sde_connector_is_fod_enabled(c_conn);
+	status = sde_connector_fod_dim_layer_status(c_conn);
 	if (status == dsi_panel_get_fod_ui(panel))
 		return;
 
-	if (status && refresh_rate >= 120)
+	if (status)
 		sde_encoder_wait_for_event(c_conn->encoder, MSM_ENC_VBLANK);
 
-	if (status) {
-		rm692e5_hbm_flag = 1;
-	} else {
-		rm692e5_hbm_flag = 0;
-	}
-	sde_backlight_device_update_status(c_conn->bl_device);
+	sde_connector_hbm_control(c_conn, status);
 
-	sde_encoder_wait_for_event(c_conn->encoder, MSM_ENC_VBLANK);
+	if (!status)
+		sde_encoder_wait_for_event(c_conn->encoder, MSM_ENC_VBLANK);
 
 	dsi_panel_set_fod_ui(panel, status);
 }

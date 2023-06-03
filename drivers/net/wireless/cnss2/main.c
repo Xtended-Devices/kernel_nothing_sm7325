@@ -2001,7 +2001,6 @@ void cnss_unregister_subsys(struct cnss_plat_data *plat_priv)
 	subsys_unregister(subsys_info->subsys_device);
 }
 
-#if IS_ENABLED(CONFIG_QCOM_MEMORY_DUMP_V2)
 static void *cnss_create_ramdump_device(struct cnss_plat_data *plat_priv)
 {
 	struct cnss_subsys_info *subsys_info = &plat_priv->subsys_info;
@@ -2015,7 +2014,6 @@ static void cnss_destroy_ramdump_device(struct cnss_plat_data *plat_priv,
 {
 	destroy_ramdump_device(ramdump_dev);
 }
-#endif
 
 int cnss_do_ramdump(struct cnss_plat_data *plat_priv)
 {
@@ -3136,6 +3134,27 @@ cnss_is_converged_dt(struct cnss_plat_data *plat_priv)
 	return of_property_read_bool(plat_priv->plat_dev->dev.of_node,
 				     "qcom,converged-dt");
 }
+
+int cnss_set_wfc_mode(struct device *dev, struct cnss_wfc_cfg cfg)
+{
+	struct cnss_plat_data *plat_priv = cnss_bus_dev_to_plat_priv(dev);
+	int ret = 0;
+
+	if (!plat_priv)
+		return -ENODEV;
+
+	/* If IMS server is connected, return success without QMI send */
+	if (test_bit(CNSS_IMS_CONNECTED, &plat_priv->driver_state)) {
+		cnss_pr_dbg("Ignore host request as IMS server is connected");
+		return ret;
+	}
+
+	ret = cnss_wlfw_send_host_wfc_call_status(plat_priv, cfg);
+
+	return ret;
+}
+EXPORT_SYMBOL(cnss_set_wfc_mode);
+
 static int cnss_probe(struct platform_device *plat_dev)
 {
 	int ret = 0;

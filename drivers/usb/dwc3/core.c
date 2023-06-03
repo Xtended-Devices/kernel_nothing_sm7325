@@ -225,7 +225,7 @@ u32 dwc3_core_fifo_space(struct dwc3_ep *dep, u8 type)
  * dwc3_core_soft_reset - Issues core soft reset and PHY reset
  * @dwc: pointer to our context structure
  */
-int dwc3_core_soft_reset(struct dwc3 *dwc)
+static int dwc3_core_soft_reset(struct dwc3 *dwc)
 {
 	u32		reg;
 	int		retries = 1000;
@@ -2180,7 +2180,6 @@ static struct platform_driver dwc3_driver = {
 		.of_match_table	= of_match_ptr(of_dwc3_match),
 		.acpi_match_table = ACPI_PTR(dwc3_acpi_match),
 		.pm	= &dwc3_dev_pm_ops,
-		.probe_type = PROBE_FORCE_SYNCHRONOUS,
 	},
 };
 

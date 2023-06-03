@@ -35,7 +35,7 @@
 	#size-cells = <2>;
 
 	chosen {
-		bootargs = "log_buf_len=256K rcupdate.rcu_expedited=1 rcu_nocbs=0-7 kpti=off noirqdebug";
+		bootargs = "log_buf_len=256K rcupdate.rcu_expedited=1 rcu_nocbs=0-7 kpti=off";
 	};
 
 	memory { device_type = "memory"; reg = <0 0 0 0>; };
@@ -494,13 +494,6 @@
 		alignment = <0x0 0x400000>;
 		size = <0x0 0x2000000>;
 		linux,cma-default;
-	};
-
-	dump_mem: mem_dump_region {
-		compatible = "shared-dma-pool";
-		alloc-ranges = <0x0 0x00000000 0x0 0xffffffff>;
-		reusable;
-		size = <0 0x2c00000>;
 	};
 
 	audio_cma_mem: audio_cma_region {
@@ -2411,7 +2404,6 @@
 		clock-names = "core_clk";
 
 		qcom,coresight-jtagmm-cpu = <&CPU0>;
-		status = "disabled";
 	};
 
 	jtag_mm1: jtagmm@7140000 {
@@ -2423,7 +2415,6 @@
 		clock-names = "core_clk";
 
 		qcom,coresight-jtagmm-cpu = <&CPU1>;
-		status = "disabled";
 	};
 
 	jtag_mm2: jtagmm@7240000 {
@@ -2435,7 +2426,6 @@
 		clock-names = "core_clk";
 
 		qcom,coresight-jtagmm-cpu = <&CPU2>;
-		status = "disabled";
 	};
 
 	jtag_mm3: jtagmm@7340000 {
@@ -2447,7 +2437,6 @@
 		clock-names = "core_clk";
 
 		qcom,coresight-jtagmm-cpu = <&CPU3>;
-		status = "disabled";
 	};
 
 	jtag_mm4: jtagmm@7440000 {
@@ -2459,7 +2448,6 @@
 		clock-names = "core_clk";
 
 		qcom,coresight-jtagmm-cpu = <&CPU4>;
-		status = "disabled";
 	};
 
 	jtag_mm5: jtagmm@7540000 {
@@ -2471,7 +2459,6 @@
 		clock-names = "core_clk";
 
 		qcom,coresight-jtagmm-cpu = <&CPU5>;
-		status = "disabled";
 	};
 
 	jtag_mm6: jtagmm@7640000 {
@@ -2483,7 +2470,6 @@
 		clock-names = "core_clk";
 
 		qcom,coresight-jtagmm-cpu = <&CPU6>;
-		status = "disabled";
 	};
 
 	jtag_mm7: jtagmm@7740000 {
@@ -2495,7 +2481,6 @@
 		clock-names = "core_clk";
 
 		qcom,coresight-jtagmm-cpu = <&CPU7>;
-		status = "disabled";
 	};
 
 	eud: qcom,msm-eud@88e0000 {
@@ -4686,7 +4671,7 @@
 
 	mem_dump {
 		compatible = "qcom,mem-dump";
-		memory-region = <&dump_mem>;
+		status = "disabled";
 
 		c0_context {
 			qcom,dump-size = <0x800>;

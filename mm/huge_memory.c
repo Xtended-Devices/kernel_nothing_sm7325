@@ -1607,7 +1607,7 @@ vm_fault_t do_huge_pmd_numa_page(struct vm_fault *vmf, pmd_t pmd)
 	 */
 	get_page(page);
 	spin_unlock(vmf->ptl);
-	anon_vma = page_lock_anon_vma_read(page);
+	anon_vma = page_lock_anon_vma_read(page, NULL);
 
 	/* Confirm the PMD did not change while page_table_lock was released */
 	spin_lock(vmf->ptl);
@@ -2509,7 +2509,8 @@ static void __split_huge_page_tail(struct page *head, int tail,
 			 (1L << PG_workingset) |
 			 (1L << PG_locked) |
 			 (1L << PG_unevictable) |
-			 (1L << PG_dirty)));
+			 (1L << PG_dirty) |
+			 LRU_GEN_MASK | LRU_REFS_MASK));
 
 	/* ->mapping in first tail page is compound_mapcount */
 	VM_BUG_ON_PAGE(tail > 2 && page_tail->mapping != TAIL_MAPPING,
@@ -2911,6 +2912,9 @@ void deferred_split_huge_page(struct page *page)
 	 * swap cache before calling try_to_unmap().
 	 */
 	if (PageSwapCache(page))
+		return;
+
+	if (!list_empty(page_deferred_list(page)))
 		return;
 
 	spin_lock_irqsave(&ds_queue->split_queue_lock, flags);

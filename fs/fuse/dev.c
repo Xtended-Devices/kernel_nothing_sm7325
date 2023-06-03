@@ -776,7 +776,8 @@ static int fuse_check_page(struct page *page)
 	       1 << PG_active |
 	       1 << PG_workingset |
 	       1 << PG_reclaim |
-	       1 << PG_waiters))) {
+	       1 << PG_waiters |
+	       LRU_GEN_MASK | LRU_REFS_MASK))) {
 		pr_warn("trying to steal weird page\n");
 		pr_warn("  page=%p index=%li flags=%08lx, count=%i, mapcount=%i, mapping=%p\n", page, page->index, page->flags, page_count(page), page_mapcount(page), page->mapping);
 		return 1;
@@ -2265,50 +2266,37 @@ static int fuse_device_clone(struct fuse_conn *fc, struct file *new)
 static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 			   unsigned long arg)
 {
-	int res;
-	int oldfd;
-	struct fuse_dev *fud = NULL;
+	int err = -ENOTTY;
 
-	switch (cmd) {
-	case FUSE_DEV_IOC_CLONE:
-		res = -EFAULT;
-		if (!get_user(oldfd, (__u32 __user *)arg)) {
+	if (cmd == FUSE_DEV_IOC_CLONE) {
+		int oldfd;
+
+		err = -EFAULT;
+		if (!get_user(oldfd, (__u32 __user *) arg)) {
 			struct file *old = fget(oldfd);
 
-			res = -EINVAL;
+			err = -EINVAL;
 			if (old) {
+				struct fuse_dev *fud = NULL;
+
 				/*
 				 * Check against file->f_op because CUSE
 				 * uses the same ioctl handler.
 				 */
 				if (old->f_op == file->f_op &&
-				    old->f_cred->user_ns ==
-					    file->f_cred->user_ns)
+				    old->f_cred->user_ns == file->f_cred->user_ns)
 					fud = fuse_get_dev(old);
 
 				if (fud) {
 					mutex_lock(&fuse_mutex);
-					res = fuse_device_clone(fud->fc, file);
+					err = fuse_device_clone(fud->fc, file);
 					mutex_unlock(&fuse_mutex);
 				}
 				fput(old);
 			}
 		}
-		break;
-	case FUSE_DEV_IOC_PASSTHROUGH_OPEN:
-		res = -EFAULT;
-		if (!get_user(oldfd, (__u32 __user *)arg)) {
-			res = -EINVAL;
-			fud = fuse_get_dev(file);
-			if (fud)
-				res = fuse_passthrough_open(fud, oldfd);
-		}
-		break;
-	default:
-		res = -ENOTTY;
-		break;
 	}
-	return res;
+	return err;
 }
 
 const struct file_operations fuse_dev_operations = {

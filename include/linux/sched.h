@@ -700,6 +700,10 @@ struct sched_dl_entity {
 	 * task has to wait for a replenishment to be performed at the
 	 * next firing of dl_timer.
 	 *
+	 * @dl_boosted tells if we are boosted due to DI. If so we are
+	 * outside bandwidth enforcement mechanism (but only until we
+	 * exit the critical section);
+	 *
 	 * @dl_yielded tells if task gave up the CPU before consuming
 	 * all its available runtime during the last job.
 	 *
@@ -714,6 +718,7 @@ struct sched_dl_entity {
 	 * overruns.
 	 */
 	unsigned int			dl_throttled      : 1;
+	unsigned int			dl_boosted        : 1;
 	unsigned int			dl_yielded        : 1;
 	unsigned int			dl_non_contending : 1;
 	unsigned int			dl_overrun	  : 1;
@@ -732,15 +737,6 @@ struct sched_dl_entity {
 	 * time.
 	 */
 	struct hrtimer inactive_timer;
-
-#ifdef CONFIG_RT_MUTEXES
-	/*
-	 * Priority Inheritance. When a DEADLINE scheduling entity is boosted
-	 * pi_se points to the donor, otherwise points to the dl_se it belongs
-	 * to (the original one/itself).
-	 */
-	struct sched_dl_entity *pi_se;
-#endif
 };
 
 #ifdef CONFIG_UCLAMP_TASK
@@ -949,6 +945,10 @@ struct task_struct {
 #endif
 #ifdef CONFIG_MEMCG
 	unsigned			in_user_fault:1;
+#endif
+#ifdef CONFIG_LRU_GEN
+	/* whether the LRU algorithm may apply to this access */
+	unsigned			in_lru_fault:1;
 #endif
 #ifdef CONFIG_COMPAT_BRK
 	unsigned			brk_randomized:1;

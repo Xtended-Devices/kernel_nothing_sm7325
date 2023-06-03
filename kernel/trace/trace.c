@@ -6015,7 +6015,7 @@ trace_poll(struct trace_iterator *iter, struct file *filp, poll_table *poll_tabl
 		return EPOLLIN | EPOLLRDNORM;
 	else
 		return ring_buffer_poll_wait(iter->trace_buffer->buffer, iter->cpu_file,
-					     filp, poll_table, iter->tr->buffer_percent);
+					     filp, poll_table);
 }
 
 static __poll_t
@@ -8323,9 +8323,6 @@ buffer_percent_write(struct file *filp, const char __user *ubuf,
 	if (val > 100)
 		return -EINVAL;
 
-	if (!val)
-		val = 1;
-
 	tr->buffer_percent = val;
 
 	(*ppos)++;
@@ -8570,6 +8567,7 @@ static int __remove_instance(struct trace_array *tr)
 	ftrace_destroy_function_files(tr);
 	tracefs_remove_recursive(tr->dir);
 	free_trace_buffers(tr);
+	clear_tracing_err_log(tr);
 
 	for (i = 0; i < tr->nr_topts; i++) {
 		kfree(tr->topts[i].topts);

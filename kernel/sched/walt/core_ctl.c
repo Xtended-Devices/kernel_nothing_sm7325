@@ -666,8 +666,7 @@ static int compute_cluster_nr_strict_need(int index)
 	struct cluster_data *cluster;
 	int nr_strict_need = 0;
 
-	/* For single cluster skip calculations */
-	if ((index != 0) || (num_clusters < 2))
+	if (index != 0)
 		return 0;
 
 	for_each_cluster(cluster, index) {

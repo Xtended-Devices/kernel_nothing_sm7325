@@ -982,7 +982,15 @@ static void __copy_skb_header(struct sk_buff *new, const struct sk_buff *old)
 #ifdef CONFIG_NET_SCHED
 	CHECK_SKB_FIELD(tc_index);
 #endif
-
+	/* ANDROID:
+	 * Due to attempts to keep the ABI stable for struct sk_buff, the new
+	 * fields were incorrectly added _AFTER_ the headers_end field, which
+	 * requires that we manually copy the fields here from the old to the
+	 * new one.
+	 * Be sure to add any new field that is added in the
+	 * ANDROID_KABI_REPLACE() macros below here as well.
+	 */
+	new->scm_io_uring = old->scm_io_uring;
 }
 
 /*
@@ -3689,11 +3697,12 @@ struct sk_buff *skb_segment_list(struct sk_buff *skb,
 
 	skb_shinfo(skb)->frag_list = NULL;
 
-	do {
+	while (list_skb) {
 		nskb = list_skb;
 		list_skb = list_skb->next;
 
 		err = 0;
+		delta_truesize += nskb->truesize;
 		if (skb_shared(nskb)) {
 			tmp = skb_clone(nskb, GFP_ATOMIC);
 			if (tmp) {
@@ -3718,7 +3727,6 @@ struct sk_buff *skb_segment_list(struct sk_buff *skb,
 		tail = nskb;
 
 		delta_len += nskb->len;
-		delta_truesize += nskb->truesize;
 
 		skb_push(nskb, -skb_network_offset(nskb) + offset);
 
@@ -3735,8 +3743,7 @@ struct sk_buff *skb_segment_list(struct sk_buff *skb,
 		if (skb_needs_linearize(nskb, features) &&
 		    __skb_linearize(nskb))
 			goto err_linearize;
-
-	} while (list_skb);
+	}
 
 	skb->truesize = skb->truesize - delta_truesize;
 	skb->data_len = skb->data_len - delta_len;

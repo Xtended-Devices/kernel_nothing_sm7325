@@ -100,7 +100,7 @@ void walt_check_for_rotation(struct rq *src_rq)
 		struct rq *rq = cpu_rq(i);
 
 		if (!is_min_capacity_cpu(i))
-			continue;
+			break;
 
 		if (is_reserved(i))
 			continue;

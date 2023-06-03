@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2008-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <uapi/linux/msm_ion.h>
@@ -2258,7 +2258,7 @@ static long gpumem_free_entry_on_timestamp(struct kgsl_device *device,
 	kgsl_readtimestamp(device, context, KGSL_TIMESTAMP_RETIRED, &temp);
 	trace_kgsl_mem_timestamp_queue(device, entry, context->id, temp,
 		timestamp);
-	ret = kgsl_add_low_prio_event(device, &context->events,
+	ret = kgsl_add_event(device, &context->events,
 		timestamp, gpumem_free_func, entry);
 
 	if (ret)
@@ -2371,7 +2371,7 @@ static long gpuobj_free_on_fence(struct kgsl_device_private *dev_priv,
 	}
 
 	handle = kgsl_sync_fence_async_wait(event.fd,
-		gpuobj_free_fence_func, entry);
+		gpuobj_free_fence_func, entry, NULL);
 
 	if (IS_ERR(handle)) {
 		kgsl_mem_entry_unset_pend(entry);
@@ -2583,6 +2583,15 @@ static int kgsl_setup_anon_useraddr(struct kgsl_pagetable *pagetable,
 }
 
 #ifdef CONFIG_DMA_SHARED_BUFFER
+static int match_file(const void *p, struct file *file, unsigned int fd)
+{
+	/*
+	 * We must return fd + 1 because iterate_fd stops searching on
+	 * non-zero return, but 0 is a valid fd.
+	 */
+	return (p == file) ? (fd + 1) : 0;
+}
+
 static void _setup_cache_mode(struct kgsl_mem_entry *entry,
 		struct vm_area_struct *vma)
 {
@@ -2619,6 +2628,8 @@ static int kgsl_setup_dmabuf_useraddr(struct kgsl_device *device,
 	vma = find_vma(current->mm, hostptr);
 
 	if (vma && vma->vm_file) {
+		int fd;
+
 		ret = check_vma_flags(vma, entry->memdesc.flags);
 		if (ret) {
 			up_read(&current->mm->mmap_sem);
@@ -2634,10 +2645,27 @@ static int kgsl_setup_dmabuf_useraddr(struct kgsl_device *device,
 			return -EFAULT;
 		}
 
-		/* Take a refcount because dma_buf_put() decrements the refcount */
-		get_file(vma->vm_file);
-
-		dmabuf = vma->vm_file->private_data;
+		/* Look for the fd that matches this vma file */
+		fd = iterate_fd(current->files, 0, match_file, vma->vm_file);
+		if (fd) {
+			dmabuf = dma_buf_get(fd - 1);
+			if (IS_ERR(dmabuf)) {
+				up_read(&current->mm->mmap_sem);
+				return PTR_ERR(dmabuf);
+			}
+			/*
+			 * It is possible that the fd obtained from iterate_fd
+			 * was closed before passing the fd to dma_buf_get().
+			 * Hence dmabuf returned by dma_buf_get() could be
+			 * different from vma->vm_file->private_data. Return
+			 * failure if this happens.
+			 */
+			if (dmabuf != vma->vm_file->private_data) {
+				dma_buf_put(dmabuf);
+				up_read(&current->mm->mmap_sem);
+				return -EBADF;
+			}
+		}
 	}
 
 	if (!dmabuf) {
@@ -4601,22 +4629,10 @@ void kgsl_core_exit(void)
 		ARRAY_SIZE(kgsl_driver.devp));
 }
 
-static long kgsl_run_one_worker(struct kthread_worker *worker,
-		struct task_struct **thread, const char *name)
-{
-	kthread_init_worker(worker);
-	*thread = kthread_run(kthread_worker_fn, worker, name);
-	if (IS_ERR(*thread)) {
-		pr_err("unable to start %s\n", name);
-		return PTR_ERR(thread);
-	}
-	return 0;
-}
-
 int __init kgsl_core_init(void)
 {
 	int result = 0;
-	struct sched_param param = { .sched_priority = 16 };
+	struct sched_param param = { .sched_priority = 2 };
 
 	place_marker("M - DRIVER KGSL Init");
 
@@ -4701,16 +4717,17 @@ int __init kgsl_core_init(void)
 		goto err;
 	}
 
-	if (IS_ERR_VALUE(kgsl_run_one_worker(&kgsl_driver.worker,
-			&kgsl_driver.worker_thread,
-			"kgsl_worker_thread")) ||
-		IS_ERR_VALUE(kgsl_run_one_worker(&kgsl_driver.low_prio_worker,
-			&kgsl_driver.low_prio_worker_thread,
-			"kgsl_low_prio_worker_thread")))
+	kthread_init_worker(&kgsl_driver.worker);
+
+	kgsl_driver.worker_thread = kthread_run(kthread_worker_fn,
+		&kgsl_driver.worker, "kgsl_worker_thread");
+
+	if (IS_ERR(kgsl_driver.worker_thread)) {
+		pr_err("kgsl: unable to start kgsl thread\n");
 		goto err;
+	}
 
 	sched_setscheduler(kgsl_driver.worker_thread, SCHED_FIFO, &param);
-	/* kgsl_driver.low_prio_worker_thread should not be SCHED_FIFO */
 
 	kgsl_events_init();
 

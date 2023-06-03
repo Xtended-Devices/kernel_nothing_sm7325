@@ -55,8 +55,14 @@ endif
 
 ifdef CONFIG_CC_IS_CLANG
 KBUILD_CFLAGS	+= -mno-implicit-float
+ifeq ($(CONFIG_ARCH_LAHAINA), y)
+KBUILD_CFLAGS  += -mcpu=cortex-a55
+endif
 else
 KBUILD_CFLAGS	+= -mgeneral-regs-only
+ifeq ($(CONFIG_ARCH_LAHAINA), y)
+KBUILD_CFLAGS  += -mcpu=cortex-a76.cortex-a55
+endif
 endif
 
 KBUILD_CFLAGS	+= $(lseinstr) $(brokengasinst)	\
@@ -147,10 +153,6 @@ else
 KBUILD_TARGET   := Image
 endif
 
-ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
-KBUILD_TARGET   += dtbo.img
-endif
-
 # Default target when executing plain make
 boot		:= arch/arm64/boot
 KBUILD_IMAGE	:= $(boot)/$(KBUILD_TARGET)
@@ -165,11 +167,6 @@ Image.%: Image
 
 zinstall install:
 	$(Q)$(MAKE) $(build)=$(boot) $@
-
-ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
-dtbo.img: dtbs
-	$(Q)$(MAKE) $(build)=$(boot) $(boot)/$@
-endif
 
 PHONY += vdso_install
 vdso_install:
